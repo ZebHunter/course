@@ -3,24 +3,29 @@ from psycopg2._psycopg import cursor
 from sshtunnel import SSHTunnelForwarder
 
 
-def execute_open_package(player_id: int, package_id: int, connect: cursor) -> None:
-    connect.execute('SELECT open_package(%s, %s);', (player_id, package_id))
+def execute_open_package(connect: cursor, player_id: int, package_id: int) -> list:
+    connect.execute('SELECT "CardID" FROM "Package_Card" WHERE "PackageID" = %s;', (package_id,))
+    card_ids = connect.fetchall()
 
-    card_ids = [1, 2, 3]
+    if not card_ids:
+        print("Package not found or no cards in the package.")
+        return []
 
+    cards_info = []
     for card_id in card_ids:
+
         connect.execute('SELECT "CardID", "Name", "Attack", "Health", "CategoryID" FROM "Card" '
-                        'WHERE "CardID" = %s;', (card_id,))
+                        'WHERE "CardID" = %s;', (card_id[0],))
         card_info = connect.fetchone()
         if card_info:
-            print(
-                f"CardID: {card_info[0]}, Name: {card_info[1]}, Attack: {card_info[2]}, Health: {card_info[3]},"
-                f" CategoryID: {card_info[4]}")
+            cards_info.append(card_info)
         else:
-            print(f"Card with ID {card_id} not found.")
+            print(f"Card with ID {card_id[0]} not found.")
+
+    return cards_info
 
 
-def print_player_promocodes(player_id: int, connect: cursor):
+def print_player_promocodes(connect: cursor, player_id: int ):
     connect.execute('SELECT "Promocode"."PromocodeID", "Promocode"."Code"'
                     'FROM "Promocode"'
                     'JOIN "Player_Promo" ON "Promocode"."PromocodeID" = "Player_Promo"."PromocodeID"'
@@ -29,6 +34,7 @@ def print_player_promocodes(player_id: int, connect: cursor):
 
     result = connect.fetchall()
     print(result)
+    return result
 
 
 def show_shop_packages(connect: cursor):
@@ -40,17 +46,20 @@ def show_shop_packages(connect: cursor):
 
     print(result)
 
+    return result
 
-def print_wallet(player_id: int, connect: cursor):
+
+def print_wallet(connect: cursor, player_id: int):
     connect.execute('SELECT "Money"."MoneyID", "Money"."Gold", "Money"."Paper", "Money"."Gems"'
                     'FROM "Money"'
                     'JOIN "Player" ON "Money"."MoneyID" = "Player"."MoneyID"'
                     'WHERE "Player"."PlayerID" = %s;', (player_id,))
     result = connect.fetchall()
     print(result)
+    return result
 
 
-def print_cards_from_inventory(player_id: int, connect: cursor) -> None:
+def print_cards_from_inventory(connect: cursor, player_id: int) -> None:
     connect.execute('SELECT "Card"."CardID", "Card"."Name", "Card"."Attack", "Card"."Health", "Card"."CategoryID"'
                     'FROM "Card"'
                     'JOIN "Deck" ON "Card"."CardID" = "Deck"."CardID"'
@@ -63,9 +72,10 @@ def print_cards_from_inventory(player_id: int, connect: cursor) -> None:
 
     for row in results:
         print(f"CardID: {row[0]}, Name: {row[1]}, Attack: {row[2]}, Health: {row[3]}, CategoryID: {row[4]}")
+    return results
 
 
-def buy_package(player_id: int, package_id: int, connect: cursor) -> None:
+def buy_package(connect: cursor, player_id: int, package_id: int) -> list:
     connect.execute('SELECT "Gold" FROM "Money" WHERE "MoneyID" = '
                     '(SELECT "MoneyID" FROM "Player" WHERE "PlayerID" = %s);',
                     (player_id,))
@@ -73,7 +83,7 @@ def buy_package(player_id: int, package_id: int, connect: cursor) -> None:
 
     if gold_balance < 100:
         print("Недостаточно Gold для покупки пакета.")
-        return
+        return None
 
     # Снимаем 100 единиц Gold
     connect.execute(
@@ -81,14 +91,21 @@ def buy_package(player_id: int, package_id: int, connect: cursor) -> None:
         'WHERE "MoneyID" = (SELECT "MoneyID" FROM "Player" WHERE "PlayerID" = %s);',
         (player_id,))
 
-    # Добавляем пакет в Zakaz
-    connect.execute('INSERT INTO "Zakaz" ("PackageID") VALUES (%s) RETURNING "ZakazID";', (package_id,))
+    connect.execute('SELECT "ZakazID" FROM "Player" WHERE "PlayerID" = %s;', (player_id,))
     zakaz_id = connect.fetchone()[0]
 
-    print(f"Пакет успешно куплен. ID Zakaz: {zakaz_id}")
+    if zakaz_id:
+        # Обновляем PackageID в таблице Zakaz, используя полученный ZakazID
+        connect.execute('UPDATE "Zakaz" SET "PackageID" = %s WHERE "ZakazID" = %s RETURNING "ZakazID";',
+                        (package_id, zakaz_id))
+        updated_zakaz_id = connect.fetchone()[0]
+        return [updated_zakaz_id]
+    else:
+        print("ZakazID не найден для данного игрока.")
+        return None
 
 
-def connection() -> cursor:
+def connection(db_operation, *args, **kwargs):
     try:
         with SSHTunnelForwarder(
                 ('helios.se.ifmo.ru', 2222),
@@ -104,8 +121,18 @@ def connection() -> cursor:
                                     host="127.0.0.1",
                                     port=server.local_bind_port)
             conn.autocommit = True
-            curs = conn.cursor()
             print("database connected")
-            return curs
+
+            # Создаем курсор
+            cursor = conn.cursor()
+
+            result = db_operation(cursor, *args, **kwargs)
+
+            # Закрываем курсор и соединение
+            cursor.close()
+            conn.close()
+            print("database disconnected")
+            return result  # Возвращаем результаты выполнения запросов
     except Exception as e:
         print(f"Disconnect: {e}")
+        return None  # Возвращаем None в случае ошибки
