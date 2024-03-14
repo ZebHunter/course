@@ -110,14 +110,14 @@ def connection(db_operation, *args, **kwargs):
         with SSHTunnelForwarder(
                 ('helios.se.ifmo.ru', 2222),
                 ssh_username="s335134",
-                ssh_password="caau#2135",
+                ssh_password="*****",
                 remote_bind_address=('pg', 5432)) as server:
             server.start()
             print("server connected")
 
             conn = psycopg2.connect(dbname="studs",
                                     user="s335134",
-                                    password="RdK6ljdUUmNJnR7T",
+                                    password="*******",
                                     host="127.0.0.1",
                                     port=server.local_bind_port)
             conn.autocommit = True
